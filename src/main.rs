@@ -34,7 +34,12 @@ fn main() -> io::Result<()> {
 
     enable_raw_mode()?;
     let mut stdout = BufWriter::with_capacity(65536, io::stdout());
-    execute!(stdout, EnterAlternateScreen, Hide, crossterm::terminal::SetTitle("cavatrix"))?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        Hide,
+        crossterm::terminal::SetTitle("cavatrix")
+    )?;
 
     let (mut cols, mut rows) = crossterm::terminal::size()?;
     let mut engine = MatrixEngine::new(cols as usize, rows as usize);
@@ -49,7 +54,8 @@ fn main() -> io::Result<()> {
     });
 
     let mut last_frame = Instant::now();
-    let mut prev_grid: Vec<Vec<(char, ColorRgb)>> = vec![vec![(' ', ColorRgb::BLACK); cols as usize]; rows as usize];
+    let mut prev_grid: Vec<Vec<(char, ColorRgb)>> =
+        vec![vec![(' ', ColorRgb::BLACK); cols as usize]; rows as usize];
 
     'main_loop: loop {
         let frame_start = Instant::now();
@@ -60,7 +66,9 @@ fn main() -> io::Result<()> {
         while event::poll(Duration::from_millis(0))? {
             match event::read()? {
                 Event::Key(key) => {
-                    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+                    if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && key.code == KeyCode::Char('c')
+                    {
                         break 'main_loop;
                     }
                     match key.code {
@@ -69,6 +77,13 @@ fn main() -> io::Result<()> {
                             palette = palette.next();
                             osd = Some(OsdMessage {
                                 text: format!("Palette: {}", palette.name()),
+                                expiry: Instant::now() + Duration::from_secs(2),
+                            });
+                        }
+                        KeyCode::Char('v') => {
+                            engine.bar_style = engine.bar_style.next();
+                            osd = Some(OsdMessage {
+                                text: format!("Bar Style: {}", engine.bar_style.name()),
                                 expiry: Instant::now() + Duration::from_secs(2),
                             });
                         }
@@ -85,11 +100,35 @@ fn main() -> io::Result<()> {
                             });
                         }
                         KeyCode::Char('b') => {
-                            engine.show_bottom_wave = !engine.show_bottom_wave;
+                            engine.show_cava_bars = !engine.show_cava_bars;
                             osd = Some(OsdMessage {
                                 text: format!(
-                                    "Bottom Visualizer Wave: {}",
-                                    if engine.show_bottom_wave { "ON" } else { "OFF" }
+                                    "CAVA Equalizer Bars: {}",
+                                    if engine.show_cava_bars {
+                                        "ON"
+                                    } else {
+                                        "OFF"
+                                    }
+                                ),
+                                expiry: Instant::now() + Duration::from_secs(2),
+                            });
+                        }
+                        KeyCode::Up => {
+                            engine.max_bar_ratio = (engine.max_bar_ratio + 0.05).min(0.90);
+                            osd = Some(OsdMessage {
+                                text: format!(
+                                    "Max Bar Height: {:.0}% of screen",
+                                    engine.max_bar_ratio * 100.0
+                                ),
+                                expiry: Instant::now() + Duration::from_secs(2),
+                            });
+                        }
+                        KeyCode::Down => {
+                            engine.max_bar_ratio = (engine.max_bar_ratio - 0.05).max(0.35);
+                            osd = Some(OsdMessage {
+                                text: format!(
+                                    "Max Bar Height: {:.0}% of screen",
+                                    engine.max_bar_ratio * 100.0
                                 ),
                                 expiry: Instant::now() + Duration::from_secs(2),
                             });
@@ -125,7 +164,11 @@ fn main() -> io::Result<()> {
                         KeyCode::Char(' ') => {
                             paused = !paused;
                             osd = Some(OsdMessage {
-                                text: if paused { "Paused".to_string() } else { "Resumed".to_string() },
+                                text: if paused {
+                                    "Paused".to_string()
+                                } else {
+                                    "Resumed".to_string()
+                                },
                                 expiry: Instant::now() + Duration::from_secs(2),
                             });
                         }
@@ -139,8 +182,12 @@ fn main() -> io::Result<()> {
                     cols = new_cols;
                     rows = new_rows;
                     engine.resize(cols as usize, rows as usize);
-                    prev_grid = vec![vec![(' ', ColorRgb::BLACK); cols as usize]; rows as usize];
-                    let _ = execute!(stdout, crossterm::terminal::Clear(crossterm::terminal::ClearType::All));
+                    prev_grid =
+                        vec![vec![(' ', ColorRgb::BLACK); cols as usize]; rows as usize];
+                    let _ = execute!(
+                        stdout,
+                        crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
+                    );
                 }
                 _ => {}
             }
@@ -175,21 +222,23 @@ fn main() -> io::Result<()> {
         }
 
         // Overlay Help Legend if active
-        if show_help && rows > 10 && cols > 45 {
+        if show_help && rows > 11 && cols > 48 {
             let help_lines = [
-                "┌────────────────── CAVATRIX HELP ──────────────────┐",
-                "│  q / Esc   - Exit cavatrix                        │",
-                "│  c         - Cycle color palette                  │",
-                "│  m         - Toggle stereo / mono audio mapping   │",
-                "│  b         - Toggle bottom CAVA equalizer wave    │",
-                "│  + / -     - Adjust audio gain / sensitivity      │",
-                "│  [ / ]     - Adjust rain falling speed            │",
-                "│  Space     - Pause / Resume visualizer            │",
-                "│  h / ?     - Toggle this help dialog              │",
-                "└───────────────────────────────────────────────────┘",
+                "┌─────────────────── CAVATRIX HELP ───────────────────┐",
+                "│  q / Esc   - Exit cavatrix                          │",
+                "│  c         - Cycle color palette                    │",
+                "│  v         - Cycle bar style (Solid/Shaded/Pillar)  │",
+                "│  b         - Toggle CAVA equalizer bars ON/OFF      │",
+                "│  Up / Down - Adjust max bar height (up to 90%)      │",
+                "│  m         - Toggle stereo / mono audio mapping     │",
+                "│  + / -     - Adjust audio gain / sensitivity        │",
+                "│  [ / ]     - Adjust rain falling speed              │",
+                "│  Space     - Pause / Resume visualizer              │",
+                "│  h / ?     - Toggle this help dialog                │",
+                "└─────────────────────────────────────────────────────┘",
             ];
             let start_row = (rows as usize - help_lines.len()) / 2;
-            let start_col = (cols as usize - 53) / 2;
+            let start_col = (cols as usize - 55) / 2;
             for (r_idx, line) in help_lines.iter().enumerate() {
                 for (c_idx, ch) in line.chars().enumerate() {
                     let row = start_row + r_idx;

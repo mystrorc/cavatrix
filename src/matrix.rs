@@ -14,6 +14,43 @@ fn random_glyph() -> char {
     GLYPHS[idx]
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum BarStyle {
+    Solid,  // '█'
+    Shaded, // '▒'
+    Dense,  // '▓'
+    Pillar, // '┃'
+}
+
+impl BarStyle {
+    pub fn next(&self) -> Self {
+        match self {
+            Self::Solid => Self::Shaded,
+            Self::Shaded => Self::Dense,
+            Self::Dense => Self::Pillar,
+            Self::Pillar => Self::Solid,
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Solid => "Solid (█)",
+            Self::Shaded => "Shaded (▒)",
+            Self::Dense => "Dense (▓)",
+            Self::Pillar => "Pillar (┃)",
+        }
+    }
+
+    pub fn fill_char(&self) -> char {
+        match self {
+            Self::Solid => '█',
+            Self::Shaded => '▒',
+            Self::Dense => '▓',
+            Self::Pillar => '┃',
+        }
+    }
+}
+
 #[derive(Clone)]
 struct DropStream {
     head_y: f32,
@@ -67,7 +104,10 @@ pub struct MatrixEngine {
     columns: Vec<Vec<DropStream>>,
     spawn_cooldowns: Vec<f32>,
     pub speed_multiplier: f32,
-    pub show_bottom_wave: bool,
+    pub show_cava_bars: bool,
+    pub bar_style: BarStyle,
+    pub max_bar_ratio: f32, // fraction of screen height bars can reach (e.g. 0.60 = 60%)
+    peaks: Vec<f32>,
 }
 
 impl MatrixEngine {
@@ -78,14 +118,17 @@ impl MatrixEngine {
             columns: vec![Vec::new(); width],
             spawn_cooldowns: vec![0.0; width],
             speed_multiplier: 1.0,
-            show_bottom_wave: true,
+            show_cava_bars: true,
+            bar_style: BarStyle::Solid,
+            max_bar_ratio: 0.65, // Extends up to 65% of screen (well over half screen)
+            peaks: vec![0.0; width],
         };
 
         // Seed initial streams with varying heights
         for col in 0..width {
             if fastrand::f32() < 0.75 {
                 let initial_y = fastrand::f32() * (height as f32);
-                let length = fastrand::usize(10..=(height * 3 / 4).max(12));
+                let length = fastrand::usize(12..=(height * 3 / 4).max(14));
                 let speed = fastrand::f32() * 12.0 + 8.0;
                 engine.columns[col].push(DropStream::new(initial_y, length, speed));
             }
@@ -100,13 +143,24 @@ impl MatrixEngine {
         self.height = new_height;
         self.columns.resize(new_width, Vec::new());
         self.spawn_cooldowns.resize(new_width, 0.0);
+        self.peaks.resize(new_width, 0.0);
     }
 
     pub fn update(&mut self, dt: f32, get_energy: impl Fn(usize) -> f32) {
+        let max_bar_h = (self.height as f32 * self.max_bar_ratio).max(4.0);
+
         for col in 0..self.width {
             let energy = get_energy(col);
+            let current_bar_h = energy * max_bar_h;
 
-            // Update existing streams in this column
+            // Update floating peak caps
+            if current_bar_h > self.peaks[col] {
+                self.peaks[col] = current_bar_h;
+            } else {
+                self.peaks[col] = (self.peaks[col] - (dt * 14.0)).max(0.0);
+            }
+
+            // Update existing rain streams in this column
             for stream in &mut self.columns[col] {
                 stream.update(dt, energy, self.speed_multiplier);
             }
@@ -119,19 +173,18 @@ impl MatrixEngine {
             self.spawn_cooldowns[col] -= dt;
 
             // Spawning probability increases with audio energy
-            let can_spawn = self.columns[col].len() < 2
+            let can_spawn = self.columns[col].len() < 3
                 && (self.columns[col].is_empty()
-                    || self.columns[col].last().unwrap().head_y > 10.0);
+                    || self.columns[col].last().unwrap().head_y > 8.0);
 
             if can_spawn && self.spawn_cooldowns[col] <= 0.0 {
-                let length = fastrand::usize(8..=(self.height * 2 / 3).max(12));
+                let length = fastrand::usize(10..=(self.height * 4 / 5).max(14));
                 let base_speed = fastrand::f32() * 14.0 + 7.0;
-                let start_y = -(fastrand::f32() * 4.0);
+                let start_y = -(fastrand::f32() * 5.0);
 
                 self.columns[col].push(DropStream::new(start_y, length, base_speed));
 
-                // Audio beats reduce cooldown so more rain pours down during drops
-                let cooldown_base = fastrand::f32() * 2.0 + 0.5;
+                let cooldown_base = fastrand::f32() * 1.8 + 0.4;
                 let cooldown_reduction = (1.0 - energy * 0.7).clamp(0.2, 1.0);
                 self.spawn_cooldowns[col] = cooldown_base * cooldown_reduction;
             }
@@ -145,9 +198,82 @@ impl MatrixEngine {
     ) -> Vec<Vec<(char, ColorRgb)>> {
         let mut grid = vec![vec![(' ', ColorRgb::BLACK); self.width]; self.height];
 
-        // Draw streams from oldest to newest
+        let max_bar_h = (self.height as f32 * self.max_bar_ratio).max(4.0);
+        const BLOCKS: &[char] = &[' ', ' ', '▂', '▃', '▄', '▅', '▆', '▇'];
+
+        // 1. Render Multi-Row CAVA Bars (Rising up to half/two-thirds screen)
+        if self.show_cava_bars && self.height > 4 {
+            let fill_glyph = self.bar_style.fill_char();
+
+            for col in 0..self.width {
+                let energy = get_energy(col);
+                if energy <= 0.01 {
+                    continue;
+                }
+
+                let bar_h = (energy * max_bar_h).min((self.height - 1) as f32);
+                let full_rows = bar_h.floor() as usize;
+                let frac = bar_h - bar_h.floor();
+
+                // Draw solid/shaded bar rows from bottom upwards
+                for dy in 0..full_rows {
+                    if dy >= self.height {
+                        break;
+                    }
+                    let y = self.height - 1 - dy;
+                    let height_ratio = dy as f32 / max_bar_h;
+
+                    // Gradient: brighter/hotter towards the top of the bar
+                    let bar_color = color::get_character_color(
+                        palette,
+                        col,
+                        self.width,
+                        (energy * 0.7 + height_ratio * 0.3).clamp(0.0, 1.0),
+                        0.7 + 0.3 * height_ratio,
+                        false,
+                    );
+
+                    grid[y][col] = (fill_glyph, bar_color);
+                }
+
+                // Draw smooth fractional block at the top peak of the bar
+                let frac_idx = ((frac * 8.0).floor() as usize).min(BLOCKS.len() - 1);
+                let top_block = BLOCKS[frac_idx];
+                if top_block != ' ' && full_rows < self.height {
+                    let y = self.height - 1 - full_rows;
+                    let peak_color = color::get_character_color(
+                        palette,
+                        col,
+                        self.width,
+                        energy,
+                        1.0,
+                        false,
+                    );
+                    grid[y][col] = (top_block, peak_color);
+                }
+
+                // Draw floating peak cap
+                let peak_h = self.peaks[col].min((self.height - 1) as f32);
+                let peak_y = (self.height - 1).saturating_sub(peak_h.round() as usize);
+                if peak_y < self.height && grid[peak_y][col].0 == ' ' {
+                    let cap_color = ColorRgb::lerp(
+                        color::get_character_color(palette, col, self.width, energy, 1.0, true),
+                        ColorRgb::WHITE,
+                        0.6,
+                    );
+                    grid[peak_y][col] = ('▔', cap_color);
+                }
+            }
+        }
+
+        // 2. Render Matrix Digital Rain (Falling through all the way to bottom)
         for col in 0..self.width {
             let energy = get_energy(col);
+            let bar_h = if self.show_cava_bars {
+                (energy * max_bar_h) as usize
+            } else {
+                0
+            };
 
             for stream in &self.columns[col] {
                 let head_int = stream.head_y.floor() as i32;
@@ -159,7 +285,7 @@ impl MatrixEngine {
                         let is_head = idx == 0;
                         let tail_factor = 1.0 - (idx as f32 / stream.length as f32);
 
-                        let color = color::get_character_color(
+                        let mut color = color::get_character_color(
                             palette,
                             col,
                             self.width,
@@ -168,39 +294,22 @@ impl MatrixEngine {
                             is_head,
                         );
 
-                        // If cell is already drawn, pick brighter color
-                        let existing = grid[y_u][col].1;
-                        let existing_lum = existing.r as u32 + existing.g as u32 + existing.b as u32;
-                        let new_lum = color.r as u32 + color.g as u32 + color.b as u32;
+                        // If glyph is inside an active CAVA bar, boost its contrast & luminosity
+                        let rows_from_bottom = self.height - 1 - y_u;
+                        let inside_bar = rows_from_bottom <= bar_h;
 
-                        if new_lum >= existing_lum {
-                            grid[y_u][col] = (ch, color);
+                        if inside_bar {
+                            if is_head {
+                                color = ColorRgb::WHITE;
+                            } else {
+                                // Supercharge glyph color inside the bar so it pops dramatically
+                                color = ColorRgb::lerp(color, ColorRgb::WHITE, 0.45);
+                            }
                         }
+
+                        // Matrix rain character always takes precedence over bar fill
+                        grid[y_u][col] = (ch, color);
                     }
-                }
-            }
-        }
-
-        // Optional bottom CAVA equalizer baseline indicator
-        if self.show_bottom_wave && self.height > 2 {
-            let bottom_row = self.height - 1;
-            const BLOCKS: &[char] = &[' ', ' ', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-
-            for col in 0..self.width {
-                let energy = get_energy(col);
-                let block_idx = ((energy * 8.0).round() as usize).min(BLOCKS.len() - 1);
-                let block_char = BLOCKS[block_idx];
-
-                if block_char != ' ' {
-                    let wave_color = color::get_character_color(
-                        palette,
-                        col,
-                        self.width,
-                        energy,
-                        1.0,
-                        false,
-                    );
-                    grid[bottom_row][col] = (block_char, wave_color);
                 }
             }
         }
