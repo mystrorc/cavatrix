@@ -2,7 +2,21 @@
 name = "cavatrix"
 version = "0.1.0"
 edition = "2024"
+authors = ["rcrout"]
+description = "Audio-reactive terminal visualizer combining cmatrix digital rain with CAVA frequency spectrum"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/mystrorc/cavatrix"
+keywords = ["cava", "cmatrix", "audio-visualizer", "terminal", "matrix"]
+categories = ["command-line-utilities", "multimedia::audio"]
 
 [dependencies]
 crossterm = "0.29.0"
 fastrand = "2.5.0"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
