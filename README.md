@@ -15,6 +15,10 @@ The falling code streams dynamically change colors, acceleration, tail luminesce
 - **Full-Depth Digital Rain**:
   - Matrix glyphs (half-width Katakana, numbers, and symbols) rain continuously from the ceiling all the way down to the bottom floor.
   - Glyphs passing through active CAVA bars pop with heightened electric luminosity and high-contrast punch.
+- **Ultra Low-CPU Architecture**:
+  - Zero-allocation double-buffered flat rendering pipeline.
+  - Sequential cursor tracking eliminating ANSI escape coordinate floods.
+  - Configurable 30 FPS default for lightweight background operation with 60 FPS support on demand.
 - **Bar Styles (`v` key)**:
   - **Solid** (`█`): Classic solid equalizer columns.
   - **Shaded** (`▒`): Semi-translucent digital holographic grid.
@@ -32,6 +36,37 @@ The falling code streams dynamically change colors, acceleration, tail luminesce
 
 ---
 
+## 🚀 Running & CLI Options
+
+Run directly in any terminal:
+```bash
+cavatrix
+```
+
+### Command-Line Flags
+```bash
+cavatrix --fps 60        # Run at 60 FPS (default: 30 FPS)
+cavatrix --mono          # Start in mono audio mapping
+cavatrix --bars 48       # Set 48 frequency spectrum bars
+cavatrix --speed 1.5     # Faster rain falling speed
+cavatrix --help          # Show full help information
+```
+
+```text
+USAGE:
+    cavatrix [OPTIONS]
+
+OPTIONS:
+    -f, --fps <FPS>       Target framerate in frames per second [default: 30] (e.g. 30, 60)
+    -b, --bars <BARS>     Number of audio frequency bars [default: 64]
+    -m, --mono            Start in mono audio mode (Bass on left -> Treble on right)
+    -s, --speed <SPEED>   Initial rain falling speed multiplier [default: 1.0]
+    -h, --help            Print help information
+    -v, --version         Print version information
+```
+
+---
+
 ## ⌨️ Controls
 
 | Key | Action |
@@ -40,7 +75,7 @@ The falling code streams dynamically change colors, acceleration, tail luminesce
 | `c` | Cycle color palette |
 | `v` | Cycle bar style (Solid `█`, Shaded `▒`, Dense `▓`, Pillar `┃`) |
 | `b` | Toggle CAVA equalizer bars ON/OFF |
-| <kbd>Up</kbd> / <kbd>Down</kbd> | Adjust max bar height (from 35% up to 90% of screen) |
+| <kbd>Up</kbd> / <kbd>Down</kbd> | Adjust max bar height (from 20% up to 95% of screen) |
 | `m` | Toggle Stereo (center bass) vs Mono (left-to-right) |
 | `+` / `=` | Increase audio sensitivity / gain |
 | `-` / `_` | Decrease audio sensitivity / gain |
@@ -50,9 +85,11 @@ The falling code streams dynamically change colors, acceleration, tail luminesce
 
 ---
 
-## 🚀 Running
+## 📦 Installation & Building
 
-Run directly in any terminal:
 ```bash
-cavatrix
+git clone https://github.com/mystrorc/cavatrix.git
+cd cavatrix
+cargo build --release
+cp target/release/cavatrix ~/.local/bin/
 ```

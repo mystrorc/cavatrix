@@ -22,7 +22,118 @@ struct OsdMessage {
     expiry: Instant,
 }
 
+fn print_help() {
+    println!(
+        r#"cavatrix {version}
+Audio-reactive terminal visualizer combining CAVA frequency spectrum with cmatrix digital rain.
+
+USAGE:
+    cavatrix [OPTIONS]
+
+OPTIONS:
+    -f, --fps <FPS>       Target framerate in frames per second [default: 30] (e.g. 30 or 60)
+    -b, --bars <BARS>     Number of audio frequency bars [default: 64]
+    -m, --mono            Start in mono audio mode (Bass on left -> Treble on right) [default: stereo]
+    -s, --speed <SPEED>   Initial rain falling speed multiplier [default: 1.0]
+    -h, --help            Print help information
+    -v, --version         Print version information
+
+INTERACTIVE CONTROLS:
+    q, Esc       Exit cavatrix
+    c            Cycle color palette (Supernova, Cyberpunk, Fire, Synthwave, etc.)
+    v            Cycle CAVA bar style (Solid █, Shaded ▒, Dense ▓, Pillar ┃)
+    b            Toggle CAVA equalizer bars ON/OFF
+    Up / Down    Adjust maximum bar height (20% - 95% of screen height)
+    m            Toggle stereo (bass in center) / mono audio mapping
+    + / = / -    Adjust audio gain / sensitivity
+    [ / ]        Adjust rain falling speed
+    Space        Pause / resume visualizer
+    h, ?         Toggle in-visualizer help overlay"#,
+        version = env!("CARGO_PKG_VERSION")
+    );
+}
+
 fn main() -> io::Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    let mut fps: u32 = 30;
+    let mut bar_count: usize = 64;
+    let mut rain_speed: f32 = 1.0;
+    let mut start_mono: bool = false;
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-h" | "--help" => {
+                print_help();
+                return Ok(());
+            }
+            "-v" | "--version" => {
+                println!("cavatrix {}", env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
+            "-f" | "--fps" => {
+                if i + 1 < args.len() {
+                    i += 1;
+                    if let Ok(val) = args[i].parse::<u32>() {
+                        fps = val.clamp(10, 120);
+                    } else {
+                        eprintln!(
+                            "Error: Invalid FPS value '{}'. Must be an integer (e.g. 30, 60).\n",
+                            args[i]
+                        );
+                        print_help();
+                        std::process::exit(1);
+                    }
+                } else {
+                    eprintln!("Error: Missing value for --fps option.\n");
+                    print_help();
+                    std::process::exit(1);
+                }
+            }
+            "-b" | "--bars" => {
+                if i + 1 < args.len() {
+                    i += 1;
+                    if let Ok(val) = args[i].parse::<usize>() {
+                        bar_count = val.clamp(16, 256);
+                    } else {
+                        eprintln!("Error: Invalid bars value '{}'. Must be an integer.\n", args[i]);
+                        print_help();
+                        std::process::exit(1);
+                    }
+                } else {
+                    eprintln!("Error: Missing value for --bars option.\n");
+                    print_help();
+                    std::process::exit(1);
+                }
+            }
+            "-s" | "--speed" => {
+                if i + 1 < args.len() {
+                    i += 1;
+                    if let Ok(val) = args[i].parse::<f32>() {
+                        rain_speed = val.clamp(0.1, 5.0);
+                    } else {
+                        eprintln!("Error: Invalid speed value '{}'.\n", args[i]);
+                        print_help();
+                        std::process::exit(1);
+                    }
+                } else {
+                    eprintln!("Error: Missing value for --speed option.\n");
+                    print_help();
+                    std::process::exit(1);
+                }
+            }
+            "-m" | "--mono" => {
+                start_mono = true;
+            }
+            other => {
+                eprintln!("Error: Unknown option '{}'.\n", other);
+                print_help();
+                std::process::exit(1);
+            }
+        }
+        i += 1;
+    }
+
     // Install panic hook to ensure terminal state is always restored
     let default_panic = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -46,13 +157,18 @@ fn main() -> io::Result<()> {
     let mut total_cells = (cols as usize) * (rows as usize);
 
     let mut engine = MatrixEngine::new(cols as usize, rows as usize);
-    let mut audio = AudioProcessor::new(64);
+    engine.speed_multiplier = rain_speed;
+
+    let mut audio = AudioProcessor::new(bar_count, fps);
+    if start_mono {
+        audio.stereo = false;
+    }
 
     let mut palette = PaletteMode::MatrixSupernova;
     let mut paused = false;
     let mut show_help = false;
     let mut osd: Option<OsdMessage> = Some(OsdMessage {
-        text: "CAVATRIX: Audio-Reactive Matrix Rain (Press 'h' for help)".to_string(),
+        text: format!("CAVATRIX: Audio-Reactive Matrix Rain @ {} FPS (Press 'h' for help)", fps),
         expiry: Instant::now() + Duration::from_secs(4),
     });
 
@@ -63,6 +179,7 @@ fn main() -> io::Result<()> {
     let mut curr_grid: Vec<(char, ColorRgb)> = vec![(' ', ColorRgb::BLACK); total_cells];
 
     let mut ch_buf = [0u8; 4];
+    let target_frame_time = Duration::from_micros(1_000_000 / fps as u64);
 
     'main_loop: loop {
         let now = Instant::now();
@@ -314,9 +431,7 @@ fn main() -> io::Result<()> {
         let _ = stdout.flush();
         prev_grid.copy_from_slice(&curr_grid);
 
-        // Smooth 30 FPS target (33ms) — cuts CPU usage by 50% vs 60 FPS while remaining fluid
         let elapsed = frame_start.elapsed();
-        let target_frame_time = Duration::from_millis(33);
         if elapsed < target_frame_time {
             thread::sleep(target_frame_time - elapsed);
         }

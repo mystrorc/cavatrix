@@ -15,11 +15,11 @@ pub struct AudioProcessor {
 }
 
 impl AudioProcessor {
-    pub fn new(bar_count: usize) -> Self {
+    pub fn new(bar_count: usize, fps: u32) -> Self {
         let spectrum = Arc::new(Mutex::new(vec![0.0f32; bar_count]));
         let using_synthetic = Arc::new(Mutex::new(false));
 
-        let child = Self::start_cava_listener(bar_count, spectrum.clone(), using_synthetic.clone());
+        let child = Self::start_cava_listener(bar_count, fps, spectrum.clone(), using_synthetic.clone());
 
         Self {
             spectrum,
@@ -34,13 +34,14 @@ impl AudioProcessor {
 
     fn start_cava_listener(
         bar_count: usize,
+        fps: u32,
         spectrum: Arc<Mutex<Vec<f32>>>,
         using_synthetic: Arc<Mutex<bool>>,
     ) -> Option<Child> {
         let cava_config = format!(
             r#"[general]
 bars = {bars}
-framerate = 30
+framerate = {fps}
 autosens = 1
 
 [input]
@@ -53,7 +54,8 @@ raw_target = /dev/stdout
 data_format = binary
 bit_format = 8bit
 "#,
-            bars = bar_count
+            bars = bar_count,
+            fps = fps.clamp(10, 120)
         );
 
         let temp_dir = std::env::temp_dir();
