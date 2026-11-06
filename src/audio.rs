@@ -40,7 +40,7 @@ impl AudioProcessor {
         let cava_config = format!(
             r#"[general]
 bars = {bars}
-framerate = 60
+framerate = 30
 autosens = 1
 
 [input]
@@ -86,7 +86,7 @@ bit_format = 8bit
                                 let is_zero = buffer.iter().all(|&b| b == 0);
                                 if is_zero {
                                     all_zeros_count += 1;
-                                    if all_zeros_count > 60 {
+                                    if all_zeros_count > 30 {
                                         *syn_clone.lock().unwrap() = true;
                                     }
                                 } else {

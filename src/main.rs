@@ -6,7 +6,7 @@ use std::io::{self, BufWriter, Write};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crossterm::cursor::{Hide, MoveTo, Show};
+use crossterm::cursor::{Hide, Show};
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -33,7 +33,8 @@ fn main() -> io::Result<()> {
     }));
 
     enable_raw_mode()?;
-    let mut stdout = BufWriter::with_capacity(65536, io::stdout());
+    // Generous output buffer (128KB) to batch terminal writes into large chunks
+    let mut stdout = BufWriter::with_capacity(131072, io::stdout());
     execute!(
         stdout,
         EnterAlternateScreen,
@@ -42,8 +43,10 @@ fn main() -> io::Result<()> {
     )?;
 
     let (mut cols, mut rows) = crossterm::terminal::size()?;
+    let mut total_cells = (cols as usize) * (rows as usize);
+
     let mut engine = MatrixEngine::new(cols as usize, rows as usize);
-    let mut audio = AudioProcessor::new(128);
+    let mut audio = AudioProcessor::new(64);
 
     let mut palette = PaletteMode::MatrixSupernova;
     let mut paused = false;
@@ -54,25 +57,34 @@ fn main() -> io::Result<()> {
     });
 
     let mut last_frame = Instant::now();
-    let mut prev_grid: Vec<Vec<(char, ColorRgb)>> =
-        vec![vec![(' ', ColorRgb::BLACK); cols as usize]; rows as usize];
+
+    // Reusable double-buffer grids to eliminate per-frame heap allocations entirely
+    let mut prev_grid: Vec<(char, ColorRgb)> = vec![(' ', ColorRgb::BLACK); total_cells];
+    let mut curr_grid: Vec<(char, ColorRgb)> = vec![(' ', ColorRgb::BLACK); total_cells];
+
+    let mut ch_buf = [0u8; 4];
 
     'main_loop: loop {
+        let now = Instant::now();
+        let dt = now.duration_since(last_frame).as_secs_f32().min(0.1);
+        last_frame = now;
         let frame_start = Instant::now();
-        let dt = last_frame.elapsed().as_secs_f32().min(0.1);
-        last_frame = frame_start;
 
-        // Process keyboard & resize events
+        // Handle user keyboard input non-blocking
         while event::poll(Duration::from_millis(0))? {
             match event::read()? {
-                Event::Key(key) => {
-                    if key.modifiers.contains(KeyModifiers::CONTROL)
-                        && key.code == KeyCode::Char('c')
+                Event::Key(key_event) => {
+                    // Check for Ctrl+C or 'q' / Esc to exit
+                    if key_event.modifiers.contains(KeyModifiers::CONTROL)
+                        && key_event.code == KeyCode::Char('c')
                     {
                         break 'main_loop;
                     }
-                    match key.code {
-                        KeyCode::Char('q') | KeyCode::Esc => break 'main_loop,
+
+                    match key_event.code {
+                        KeyCode::Char('q') | KeyCode::Esc => {
+                            break 'main_loop;
+                        }
                         KeyCode::Char('c') => {
                             palette = palette.next();
                             osd = Some(OsdMessage {
@@ -84,6 +96,36 @@ fn main() -> io::Result<()> {
                             engine.bar_style = engine.bar_style.next();
                             osd = Some(OsdMessage {
                                 text: format!("Bar Style: {}", engine.bar_style.name()),
+                                expiry: Instant::now() + Duration::from_secs(2),
+                            });
+                        }
+                        KeyCode::Char('b') => {
+                            engine.show_cava_bars = !engine.show_cava_bars;
+                            osd = Some(OsdMessage {
+                                text: format!(
+                                    "CAVA Equalizer Bars: {}",
+                                    if engine.show_cava_bars { "ON" } else { "OFF" }
+                                ),
+                                expiry: Instant::now() + Duration::from_secs(2),
+                            });
+                        }
+                        KeyCode::Up => {
+                            engine.max_bar_ratio = (engine.max_bar_ratio + 0.05).min(0.95);
+                            osd = Some(OsdMessage {
+                                text: format!(
+                                    "Max Bar Height: {:.0}% screen",
+                                    engine.max_bar_ratio * 100.0
+                                ),
+                                expiry: Instant::now() + Duration::from_secs(2),
+                            });
+                        }
+                        KeyCode::Down => {
+                            engine.max_bar_ratio = (engine.max_bar_ratio - 0.05).max(0.20);
+                            osd = Some(OsdMessage {
+                                text: format!(
+                                    "Max Bar Height: {:.0}% screen",
+                                    engine.max_bar_ratio * 100.0
+                                ),
                                 expiry: Instant::now() + Duration::from_secs(2),
                             });
                         }
@@ -99,49 +141,15 @@ fn main() -> io::Result<()> {
                                 expiry: Instant::now() + Duration::from_secs(2),
                             });
                         }
-                        KeyCode::Char('b') => {
-                            engine.show_cava_bars = !engine.show_cava_bars;
-                            osd = Some(OsdMessage {
-                                text: format!(
-                                    "CAVA Equalizer Bars: {}",
-                                    if engine.show_cava_bars {
-                                        "ON"
-                                    } else {
-                                        "OFF"
-                                    }
-                                ),
-                                expiry: Instant::now() + Duration::from_secs(2),
-                            });
-                        }
-                        KeyCode::Up => {
-                            engine.max_bar_ratio = (engine.max_bar_ratio + 0.05).min(0.90);
-                            osd = Some(OsdMessage {
-                                text: format!(
-                                    "Max Bar Height: {:.0}% of screen",
-                                    engine.max_bar_ratio * 100.0
-                                ),
-                                expiry: Instant::now() + Duration::from_secs(2),
-                            });
-                        }
-                        KeyCode::Down => {
-                            engine.max_bar_ratio = (engine.max_bar_ratio - 0.05).max(0.35);
-                            osd = Some(OsdMessage {
-                                text: format!(
-                                    "Max Bar Height: {:.0}% of screen",
-                                    engine.max_bar_ratio * 100.0
-                                ),
-                                expiry: Instant::now() + Duration::from_secs(2),
-                            });
-                        }
                         KeyCode::Char('+') | KeyCode::Char('=') => {
-                            audio.gain = (audio.gain * 1.2).min(5.0);
+                            audio.gain = (audio.gain * 1.25).min(5.0);
                             osd = Some(OsdMessage {
                                 text: format!("Audio Gain: {:.1}x", audio.gain),
                                 expiry: Instant::now() + Duration::from_secs(2),
                             });
                         }
-                        KeyCode::Char('-') | KeyCode::Char('_') => {
-                            audio.gain = (audio.gain / 1.2).max(0.2);
+                        KeyCode::Char('-') => {
+                            audio.gain = (audio.gain / 1.25).max(0.2);
                             osd = Some(OsdMessage {
                                 text: format!("Audio Gain: {:.1}x", audio.gain),
                                 expiry: Instant::now() + Duration::from_secs(2),
@@ -181,9 +189,10 @@ fn main() -> io::Result<()> {
                 Event::Resize(new_cols, new_rows) => {
                     cols = new_cols;
                     rows = new_rows;
+                    total_cells = (cols as usize) * (rows as usize);
                     engine.resize(cols as usize, rows as usize);
-                    prev_grid =
-                        vec![vec![(' ', ColorRgb::BLACK); cols as usize]; rows as usize];
+                    prev_grid = vec![(' ', ColorRgb::BLACK); total_cells];
+                    curr_grid = vec![(' ', ColorRgb::BLACK); total_cells];
                     let _ = execute!(
                         stdout,
                         crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
@@ -202,9 +211,13 @@ fn main() -> io::Result<()> {
             engine.update(dt, |col| audio.get_column_energy(col, width));
         }
 
-        // Render matrix grid
+        // Render matrix directly into flat slice with zero allocations
         let width = engine.width;
-        let mut grid = engine.render_frame(palette, |col| audio.get_column_energy(col, width));
+        engine.render_into(
+            palette,
+            |col| audio.get_column_energy(col, width),
+            &mut curr_grid,
+        );
 
         // Overlay OSD notification if active
         if let Some(ref msg) = osd {
@@ -215,7 +228,10 @@ fn main() -> io::Result<()> {
                     let start_col = (cols as usize - banner_len) / 2;
                     let target_row = 1;
                     for (i, ch) in banner.chars().enumerate() {
-                        grid[target_row][start_col + i] = (ch, ColorRgb::new(255, 255, 255));
+                        let idx = target_row * (cols as usize) + (start_col + i);
+                        if idx < total_cells {
+                            curr_grid[idx] = (ch, ColorRgb::new(255, 255, 255));
+                        }
                     }
                 }
             }
@@ -241,26 +257,44 @@ fn main() -> io::Result<()> {
             let start_col = (cols as usize - 55) / 2;
             for (r_idx, line) in help_lines.iter().enumerate() {
                 for (c_idx, ch) in line.chars().enumerate() {
-                    let row = start_row + r_idx;
-                    let col = start_col + c_idx;
-                    if row < rows as usize && col < cols as usize {
-                        grid[row][col] = (ch, ColorRgb::new(200, 250, 255));
+                    let r = start_row + r_idx;
+                    let c = start_col + c_idx;
+                    if r < rows as usize && c < cols as usize {
+                        let idx = r * (cols as usize) + c;
+                        if idx < total_cells {
+                            curr_grid[idx] = (ch, ColorRgb::new(200, 250, 255));
+                        }
                     }
                 }
             }
         }
 
-        // Draw double-buffered diff to stdout
+        // High-Performance Sequential Terminal Renderer:
+        // Only emit MoveTo when the cursor actually has to jump (skipping unchanged cells).
+        // For continuous runs of updated characters, the terminal cursor advances automatically!
+        let mut cursor_r: usize = usize::MAX;
+        let mut cursor_c: usize = usize::MAX;
         let mut current_fg: Option<ColorRgb> = None;
 
-        for r in 0..rows as usize {
-            for c in 0..cols as usize {
-                let (ch, col_rgb) = grid[r][c];
-                let prev = prev_grid[r][c];
+        let w = cols as usize;
+        let h = rows as usize;
 
-                if ch != prev.0 || col_rgb != prev.1 {
-                    let _ = execute!(stdout, MoveTo(c as u16, r as u16));
+        for r in 0..h {
+            let row_offset = r * w;
+            for c in 0..w {
+                let idx = row_offset + c;
+                let (ch, col_rgb) = curr_grid[idx];
+                let (prev_ch, prev_col) = prev_grid[idx];
 
+                if ch != prev_ch || col_rgb != prev_col {
+                    // Only jump the cursor if it isn't already sitting at (r, c)
+                    if cursor_r != r || cursor_c != c {
+                        let _ = write!(stdout, "\x1b[{};{}H", r + 1, c + 1);
+                        cursor_r = r;
+                        cursor_c = c;
+                    }
+
+                    // Only emit color escape sequence if color changed
                     if current_fg != Some(col_rgb) {
                         let _ = write!(
                             stdout,
@@ -270,17 +304,19 @@ fn main() -> io::Result<()> {
                         current_fg = Some(col_rgb);
                     }
 
-                    let _ = write!(stdout, "{}", ch);
+                    let ch_str = ch.encode_utf8(&mut ch_buf);
+                    let _ = stdout.write_all(ch_str.as_bytes());
+                    cursor_c += 1; // Terminal cursor naturally advances by 1
                 }
             }
         }
 
         let _ = stdout.flush();
-        prev_grid = grid;
+        prev_grid.copy_from_slice(&curr_grid);
 
-        // Maintain ~60 FPS
+        // Smooth 30 FPS target (33ms) — cuts CPU usage by 50% vs 60 FPS while remaining fluid
         let elapsed = frame_start.elapsed();
-        let target_frame_time = Duration::from_millis(16);
+        let target_frame_time = Duration::from_millis(33);
         if elapsed < target_frame_time {
             thread::sleep(target_frame_time - elapsed);
         }

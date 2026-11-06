@@ -44,25 +44,27 @@ impl ColorRgb {
         b: 255,
     };
 
+    #[inline(always)]
     pub fn new(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b }
     }
 
+    #[inline(always)]
     pub fn lerp(a: Self, b: Self, t: f32) -> Self {
         let t = t.clamp(0.0, 1.0);
         Self {
-            r: (a.r as f32 + (b.r as f32 - a.r as f32) * t).round() as u8,
-            g: (a.g as f32 + (b.g as f32 - a.g as f32) * t).round() as u8,
-            b: (a.b as f32 + (b.b as f32 - a.b as f32) * t).round() as u8,
+            r: (a.r as f32 + (b.r as f32 - a.r as f32) * t) as u8,
+            g: (a.g as f32 + (b.g as f32 - a.g as f32) * t) as u8,
+            b: (a.b as f32 + (b.b as f32 - a.b as f32) * t) as u8,
         }
     }
 
+    #[inline(always)]
     pub fn scale(&self, factor: f32) -> Self {
-        let factor = factor.max(0.0);
         Self {
-            r: ((self.r as f32 * factor).min(255.0)).round() as u8,
-            g: ((self.g as f32 * factor).min(255.0)).round() as u8,
-            b: ((self.b as f32 * factor).min(255.0)).round() as u8,
+            r: ((self.r as f32 * factor).min(255.0)) as u8,
+            g: ((self.g as f32 * factor).min(255.0)) as u8,
+            b: ((self.b as f32 * factor).min(255.0)) as u8,
         }
     }
 
@@ -87,13 +89,14 @@ impl ColorRgb {
         };
 
         Self {
-            r: ((r1 + m) * 255.0).clamp(0.0, 255.0).round() as u8,
-            g: ((g1 + m) * 255.0).clamp(0.0, 255.0).round() as u8,
-            b: ((b1 + m) * 255.0).clamp(0.0, 255.0).round() as u8,
+            r: ((r1 + m) * 255.0).clamp(0.0, 255.0) as u8,
+            g: ((g1 + m) * 255.0).clamp(0.0, 255.0) as u8,
+            b: ((b1 + m) * 255.0).clamp(0.0, 255.0) as u8,
         }
     }
 }
 
+#[inline]
 pub fn get_character_color(
     mode: PaletteMode,
     column: usize,
@@ -104,10 +107,8 @@ pub fn get_character_color(
 ) -> ColorRgb {
     if is_head {
         if audio_energy > 0.85 {
-            // Intense energy: pure blazing white with slight tint
             return ColorRgb::WHITE;
         } else {
-            // Moderately bright head
             let head_tint = match mode {
                 PaletteMode::MatrixSupernova => ColorRgb::new(200, 255, 210),
                 PaletteMode::CyberpunkSynthwave => ColorRgb::new(255, 210, 255),
@@ -121,7 +122,6 @@ pub fn get_character_color(
 
     let base_color = match mode {
         PaletteMode::MatrixSupernova => {
-            // Matrix phosphor green -> electric lime -> cyan -> hot orange -> supernova pink
             let green_dim = ColorRgb::new(0, 110, 30);
             let green_bright = ColorRgb::new(20, 255, 80);
             let electric_lime = ColorRgb::new(140, 255, 20);
@@ -130,44 +130,42 @@ pub fn get_character_color(
             let hot_pink = ColorRgb::new(255, 20, 110);
 
             if audio_energy < 0.25 {
-                let t = audio_energy / 0.25;
+                let t = audio_energy * 4.0;
                 ColorRgb::lerp(green_dim, green_bright, t)
             } else if audio_energy < 0.50 {
-                let t = (audio_energy - 0.25) / 0.25;
+                let t = (audio_energy - 0.25) * 4.0;
                 ColorRgb::lerp(green_bright, electric_lime, t)
             } else if audio_energy < 0.75 {
-                let t = (audio_energy - 0.50) / 0.25;
+                let t = (audio_energy - 0.50) * 4.0;
                 ColorRgb::lerp(electric_lime, neon_cyan, t)
             } else if audio_energy < 0.90 {
-                let t = (audio_energy - 0.75) / 0.15;
+                let t = (audio_energy - 0.75) * 6.666;
                 ColorRgb::lerp(neon_cyan, hot_orange, t)
             } else {
-                let t = (audio_energy - 0.90) / 0.10;
+                let t = (audio_energy - 0.90) * 10.0;
                 ColorRgb::lerp(hot_orange, hot_pink, t)
             }
         }
 
         PaletteMode::CyberpunkSynthwave => {
-            // Deep purple -> Electric violet -> Neon cyan -> Hot pink
             let dark_purple = ColorRgb::new(60, 10, 100);
             let electric_violet = ColorRgb::new(160, 20, 255);
             let neon_cyan = ColorRgb::new(0, 240, 255);
             let hot_pink = ColorRgb::new(255, 0, 140);
 
             if audio_energy < 0.35 {
-                let t = audio_energy / 0.35;
+                let t = audio_energy * 2.857;
                 ColorRgb::lerp(dark_purple, electric_violet, t)
             } else if audio_energy < 0.70 {
-                let t = (audio_energy - 0.35) / 0.35;
+                let t = (audio_energy - 0.35) * 2.857;
                 ColorRgb::lerp(electric_violet, neon_cyan, t)
             } else {
-                let t = (audio_energy - 0.70) / 0.30;
+                let t = (audio_energy - 0.70) * 3.333;
                 ColorRgb::lerp(neon_cyan, hot_pink, t)
             }
         }
 
         PaletteMode::RainbowWave => {
-            // Frequency / position drives hue; amplitude drives saturation & brightness
             let col_ratio = column as f32 / total_cols.max(1) as f32;
             let hue = (col_ratio * 360.0 + audio_energy * 120.0) % 360.0;
             let sat = (0.7 + 0.3 * audio_energy).clamp(0.0, 1.0);
@@ -176,42 +174,40 @@ pub fn get_character_color(
         }
 
         PaletteMode::IceAndFire => {
-            // Glacial arctic blue/cyan -> Blazing amber flame & lava
             let deep_blue = ColorRgb::new(15, 60, 180);
             let ice_cyan = ColorRgb::new(50, 200, 255);
             let flame_gold = ColorRgb::new(255, 180, 20);
             let lava_red = ColorRgb::new(255, 40, 10);
 
             if audio_energy < 0.40 {
-                let t = audio_energy / 0.40;
+                let t = audio_energy * 2.5;
                 ColorRgb::lerp(deep_blue, ice_cyan, t)
             } else if audio_energy < 0.75 {
-                let t = (audio_energy - 0.40) / 0.35;
+                let t = (audio_energy - 0.40) * 2.857;
                 ColorRgb::lerp(ice_cyan, flame_gold, t)
             } else {
-                let t = (audio_energy - 0.75) / 0.25;
+                let t = (audio_energy - 0.75) * 4.0;
                 ColorRgb::lerp(flame_gold, lava_red, t)
             }
         }
 
         PaletteMode::AmaneSunset => {
-            // Twilight velvet -> Amane coral #f56d66 -> Sunrise gold
             let velvet = ColorRgb::new(50, 20, 80);
             let amane_coral = ColorRgb::new(245, 109, 102);
             let warm_gold = ColorRgb::new(255, 215, 100);
 
             if audio_energy < 0.50 {
-                let t = audio_energy / 0.50;
+                let t = audio_energy * 2.0;
                 ColorRgb::lerp(velvet, amane_coral, t)
             } else {
-                let t = (audio_energy - 0.50) / 0.50;
+                let t = (audio_energy - 0.50) * 2.0;
                 ColorRgb::lerp(amane_coral, warm_gold, t)
             }
         }
     };
 
-    // Apply tail decay: characters get dimmer down the tail, with audio energy preventing dropoff
-    let decay_curve = tail_factor.powf(1.6);
+    // Fast polynomial decay curve: matches powf(1.6) without heavy transcendental math
+    let decay_curve = tail_factor * (0.3 + 0.7 * tail_factor);
     let min_visibility = 0.15 + 0.25 * audio_energy;
     let brightness = (decay_curve * (1.0 - min_visibility) + min_visibility).clamp(0.0, 1.0);
 
